@@ -49,21 +49,12 @@ import qualified Plutus.Contract                                 as PlutusContra
 import qualified Ledger.Constraints                              as Constraints
 import qualified Plutus.V1.Ledger.Scripts                        as ScriptsLedger
 import qualified Ledger.Typed.Scripts                            as Scripts
-import qualified Text.Printf                                     as TextPrintf (printf)
 import qualified NFTAuction.NFTAuctionOnChain                    as OnChain
-import Data.ByteString as S (ByteString, unpack)
-import Data.ByteString.Char8 as C8 (pack)
-import Data.Char (chr)
+import qualified Text.Printf              as TextPrintf (printf)
 
 
 type NFT = Ledger.AssetClass
 
-
-strToBS :: P.String -> S.ByteString
-strToBS = C8.pack
-
-bsToStr :: S.ByteString -> P.String
-bsToStr = P.map (chr . P.fromEnum) . S.unpack
 
 {-# INLINABLE mkPolicy #-}
 mkPolicy :: ContextsV1.TxOutRef -> V2LedgerApi.TokenName -> () -> ContextsV1.ScriptContext -> Bool
@@ -117,8 +108,7 @@ data CloseAuctionParams = CloseAuctionParams
     } deriving (GHCGenerics.Generic, DataAeson.ToJSON, DataAeson.FromJSON, DataOpenApiSchema.ToSchema)
 
 data NFTParams = NFTParams
-    { npToken   :: !V2LedgerApi.TokenName
-    , npAddress :: !V1LAddress.Address
+    { 
     } deriving (GHCGenerics.Generic, DataAeson.ToJSON, DataAeson.FromJSON, DataOpenApiSchema.ToSchema)
 
 type NFTAucctionSchema = 
@@ -134,7 +124,14 @@ start sp = do
     case Map.keys utxos of
         []       -> PlutusContract.logError @P.String "no utxo found"
         oref : _ -> do
-            let tn      = spToken sp   
+            let tn      = spToken sp
+            let val     = ValueV1.singleton (curSymbol oref tn) tn 1
+                crsy    = V2LedgerApi.unCurrencySymbol (curSymbol oref tn)
+                mlookups = Constraints.plutusV1MintingPolicy (policy oref tn) P.<> Constraints.unspentOutputs utxos
+                mtx      = Constraints.mustMintValue val P.<> Constraints.mustSpendPubKeyOutput oref
+            ledgerTx <- PlutusContract.submitTxConstraintsWith @Void.Void mlookups mtx
+            Monad.void $ PlutusContract.awaitTxConfirmed $ LTX.getCardanoTxId ledgerTx
+            PlutusContract.logInfo @P.String $ TextPrintf.printf "cursymbol %s" (P.show crsy)   
             let d = OnChain.Dat
                     {
                         OnChain.dSeller = spSeller sp,
@@ -147,38 +144,35 @@ start sp = do
                 v = (ValueV1.singleton (curSymbol oref tn) tn 1) P.<> Ada.lovelaceValueOf 50000000
                 tx = Constraints.mustPayToOtherScript OnChain.validatorHash (ScriptsLedger.Datum $ PlutusTx.toBuiltinData d) v
                 lookups = Constraints.plutusV2OtherScript OnChain.validator
-                dsp = bsToStr (V2LedgerApi.fromBuiltin (V2LedgerApi.unCurrencySymbol (curSymbol oref tn)))   
             submittedTx <- PlutusContract.submitTxConstraintsWith @Void.Void lookups tx
             Monad.void $ PlutusContract.awaitTxConfirmed $ LTX.getCardanoTxId submittedTx
             PlutusContract.logInfo @P.String $ "created contract"
 
 
--- bid :: PlaceBidParams -> PlutusContract.Contract w s DataText.Text ()
--- bid pbp = do
---     (oref, o, )
 
-mint :: NFTParams -> PlutusContract.Contract w NFTAucctionSchema DataText.Text ()
-mint np = do
-    utxos <- PlutusContract.utxosAt $ npAddress np
-    case Map.keys utxos of
-        []       -> PlutusContract.logError @P.String "no utxo found"
-        oref : _ -> do
-            let tn      = npToken np
-            let val     = ValueV1.singleton (curSymbol oref tn) tn 1
-                lookups = Constraints.plutusV1MintingPolicy (policy oref tn) P.<> Constraints.unspentOutputs utxos
-                tx      = Constraints.mustMintValue val P.<> Constraints.mustSpendPubKeyOutput oref
-                dsp = bsToStr (V2LedgerApi.fromBuiltin (V2LedgerApi.unCurrencySymbol (curSymbol oref tn)))
-            ledgerTx <- PlutusContract.submitTxConstraintsWith @Void.Void lookups tx
-            Monad.void $ PlutusContract.awaitTxConfirmed $ LTX.getCardanoTxId ledgerTx
-            PlutusContract.logInfo @P.String $ dsp
+
+-- mint :: NFTParams -> PlutusContract.Contract w NFTAucctionSchema DataText.Text ()
+-- mint np = do
+--     utxos <- PlutusContract.utxosAt $ npAddress np
+--     case Map.keys utxos of
+--         []       -> PlutusContract.logError @P.String "no utxo found"
+--         oref : _ -> do
+--             let tn      = npToken np
+--             let val     = ValueV1.singleton (curSymbol oref tn) tn 1
+--                 crsy    = V2LedgerApi.unCurrencySymbol (curSymbol oref tn)
+--                 mlookups = Constraints.plutusV1MintingPolicy (policy oref tn) P.<> Constraints.unspentOutputs utxos
+--                 mtx      = Constraints.mustMintValue val P.<> Constraints.mustSpendPubKeyOutput oref
+--             ledgerTx <- PlutusContract.submitTxConstraintsWith @Void.Void mlookups mtx
+--             Monad.void $ PlutusContract.awaitTxConfirmed $ LTX.getCardanoTxId ledgerTx
+--             PlutusContract.logInfo @P.String $ TextPrintf.printf "cursymbol %s" (P.show crsy)
             
 
 
 endpoints :: PlutusContract.Contract () NFTAucctionSchema DataText.Text ()
-endpoints = PlutusContract.awaitPromise (start' `PlutusContract.select` mint') >> endpoints
+endpoints = PlutusContract.awaitPromise (start') >> endpoints
     where 
         start' = PlutusContract.endpoint @"start" start
-        mint' = PlutusContract.endpoint @"mint" mint
+        --mint' = PlutusContract.endpoint @"mint" mint
         --grab' = PlutusContract.endpoint @"grab" $ grab
 
 -- data Dat = Dat
